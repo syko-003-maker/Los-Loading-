@@ -311,17 +311,29 @@ setInterval(() => {
 // ============= GMod API hooks =============
 let totalFiles = 0;
 let filesNeeded = 0;
-let filesReceived = 0;
+let lastActivityTs = Date.now();
+let phase = "init"; // init -> downloading -> loading_map -> done
+let displayedPct = 0;
 const fileHistory = [];
 
-function updateProgress() {
-  let pct = 0;
-  if (totalFiles > 0) {
-    const got = totalFiles - filesNeeded;
-    pct = Math.max(0, Math.min(100, (got / totalFiles) * 100));
-  }
+function setDisplayed(pct, force) {
+  pct = Math.max(0, Math.min(100, pct));
+  // Don't go backwards (unless forced)
+  if (!force && pct < displayedPct) return;
+  displayedPct = pct;
   document.getElementById('pct').textContent = Math.floor(pct) + '%';
   document.getElementById('fill').style.width = pct + '%';
+}
+
+function updateProgress() {
+  if (totalFiles > 0) {
+    const got = totalFiles - filesNeeded;
+    let pct = (got / totalFiles) * 100;
+    // Cap at 90% during download phase — keep 10% for map/Lua load
+    if (pct > 90 && filesNeeded > 0) pct = 90;
+    setDisplayed(pct);
+  }
+  lastActivityTs = Date.now();
 }
 
 function pushFile(name) {
@@ -337,6 +349,29 @@ function pushFile(name) {
   document.getElementById('files').innerHTML = html;
 }
 
+// ============= Watchdog : detect stuck downloads =============
+// If no progress update for 4s, assume we're in the map-load phase (GMod stops
+// updating SetFilesNeeded during map load) — bump to 95% and show "Finalisation".
+setInterval(() => {
+  const idleMs = Date.now() - lastActivityTs;
+  if (totalFiles === 0) return;  // nothing started yet
+  if (filesNeeded === 0) {
+    setDisplayed(100, true);
+    document.getElementById('status').textContent = 'Chargement de la carte…';
+    return;
+  }
+  if (idleMs > 4000) {
+    // probably some files failed (paid workshop content non-accessible) or we're past download
+    setDisplayed(Math.max(displayedPct + 1, 95));
+    document.getElementById('status').textContent = 'Finalisation… (' + filesNeeded + ' fichiers en attente)';
+  }
+  // After 30s of total stagnation, just go full 100%
+  if (idleMs > 30000) {
+    setDisplayed(100, true);
+    document.getElementById('status').textContent = 'Chargement de la carte…';
+  }
+}, 1000);
+
 // GMod calls these globally
 window.GameDetails = function(servername, serverurl, mapname, maxplayers, steamid, gamemode) {
   if (servername) document.getElementById('server-name').textContent = servername;
@@ -344,6 +379,7 @@ window.GameDetails = function(servername, serverurl, mapname, maxplayers, steami
   if (gamemode)   document.getElementById('gamemode').textContent    = gamemode;
   if (maxplayers) document.getElementById('max-players').textContent = '? / ' + maxplayers;
   document.getElementById('status').textContent = 'Connecté au serveur ' + (servername || '');
+  lastActivityTs = Date.now();
 };
 
 window.SetFilesTotal = function(total) {
@@ -361,17 +397,18 @@ window.DownloadingFile = function(filename) {
     pushFile(filename.split('/').pop());
     document.getElementById('status').textContent = 'Téléchargement : ' + filename;
   }
+  lastActivityTs = Date.now();
 };
 
 window.SetStatusChanged = function(status) {
   if (status) document.getElementById('status').textContent = status;
+  lastActivityTs = Date.now();
 };
 
 // Demo mode (when opened in normal browser without GMod injecting)
 if (!window.__gmod) {
   setTimeout(() => {
     if (totalFiles === 0) {
-      // fake demo
       window.SetFilesTotal(50);
       let n = 50;
       const iv = setInterval(() => {
