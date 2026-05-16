@@ -312,9 +312,11 @@ setInterval(() => {
 let totalFiles = 0;
 let filesNeeded = 0;
 let lastActivityTs = Date.now();
-let phase = "init"; // init -> downloading -> loading_map -> done
 let displayedPct = 0;
+let isGmod = false;  // true once GMod calls one of our callbacks
 const fileHistory = [];
+
+function flagGmod() { isGmod = true; }
 
 function setDisplayed(pct, force) {
   pct = Math.max(0, Math.min(100, pct));
@@ -372,27 +374,32 @@ setInterval(() => {
   }
 }, 1000);
 
-// GMod calls these globally
+// GMod calls these globally. Each one flips isGmod=true so we never run demo
+// alongside real data.
 window.GameDetails = function(servername, serverurl, mapname, maxplayers, steamid, gamemode) {
+  flagGmod();
   if (servername) document.getElementById('server-name').textContent = servername;
   if (mapname)    document.getElementById('map-name').textContent    = mapname;
   if (gamemode)   document.getElementById('gamemode').textContent    = gamemode;
   if (maxplayers) document.getElementById('max-players').textContent = '? / ' + maxplayers;
-  document.getElementById('status').textContent = 'Connecté au serveur ' + (servername || '');
+  document.getElementById('status').textContent = 'Connecté à ' + (servername || 'serveur');
   lastActivityTs = Date.now();
 };
 
 window.SetFilesTotal = function(total) {
+  flagGmod();
   totalFiles = total;
   updateProgress();
 };
 
 window.SetFilesNeeded = function(needed) {
+  flagGmod();
   filesNeeded = needed;
   updateProgress();
 };
 
 window.DownloadingFile = function(filename) {
+  flagGmod();
   if (filename) {
     pushFile(filename.split('/').pop());
     document.getElementById('status').textContent = 'Téléchargement : ' + filename;
@@ -401,25 +408,31 @@ window.DownloadingFile = function(filename) {
 };
 
 window.SetStatusChanged = function(status) {
+  flagGmod();
   if (status) document.getElementById('status').textContent = status;
   lastActivityTs = Date.now();
 };
 
-// Demo mode (when opened in normal browser without GMod injecting)
-if (!window.__gmod) {
-  setTimeout(() => {
-    if (totalFiles === 0) {
-      window.SetFilesTotal(50);
-      let n = 50;
-      const iv = setInterval(() => {
-        n -= Math.floor(Math.random() * 3) + 1;
-        if (n <= 0) { n = 0; clearInterval(iv); }
-        window.SetFilesNeeded(n);
-        window.DownloadingFile('asset_' + (50 - n) + '.vmt');
-      }, 600);
-    }
-  }, 1500);
-}
+// Demo mode : ONLY runs if no GMod callback has fired after 4 seconds.
+// Used when the page is opened in a regular browser (GitHub Pages preview).
+// In real GMod, GameDetails/SetFilesTotal fire well before 4s, so we never
+// pollute the screen with fake asset names.
+setTimeout(() => {
+  if (isGmod) return;        // Real GMod is driving things, hands off
+  if (totalFiles > 0) return;
+  // browser preview only
+  document.getElementById('status').textContent = '(Aperçu navigateur — connecte-toi via GMod pour le vrai chargement)';
+  totalFiles = 50;
+  let n = 50;
+  const iv = setInterval(() => {
+    if (isGmod) { clearInterval(iv); return; }  // belt+suspenders
+    n -= Math.floor(Math.random() * 3) + 1;
+    if (n <= 0) { n = 0; clearInterval(iv); }
+    filesNeeded = n;
+    updateProgress();
+    pushFile('preview_' + (50 - n) + '.vmt');
+  }, 600);
+}, 4000);
 </script>
 
 </body>
